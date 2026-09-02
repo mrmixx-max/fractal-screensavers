@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<!--
+  FRACTAL SCREENSAVER — Single-File, keine Abhängigkeiten, läuft offline.
+  Start: Datei im Browser öffnen. F oder Doppelklick = Vollbild, Esc = Beenden,
+  Leertaste = Pause. Feintuning oben im CONFIG-Block.
+-->
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fraktal-Screensaver</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#000; }
+  canvas { display:block; width:100vw; height:100vh; }
+  body.idle { cursor:none; }
+  #hint {
+    position:fixed; left:50%; bottom:6%; transform:translateX(-50%);
+    color:#fff; opacity:0; transition:opacity .6s; pointer-events:none;
+    font:14px/1.4 system-ui, sans-serif; letter-spacing:.06em;
+    background:rgba(0,0,0,.35); padding:8px 18px; border-radius:20px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">F = Vollbild &nbsp;·&nbsp; Leertaste = Pause &nbsp;·&nbsp; Esc = Beenden</div>
+<script>
+'use strict';
+/* ============================== CONFIG ============================== */
+const CONFIG = {
+  zoomSecondsPerLeg : 46,     // Dauer eines Zoom-Flugs zu einem Zielpunkt
+  holdFraction      : 0.22,   // Anteil der Leg als Verweil-/Driftphase am Ziel
+  fadeSeconds       : 1.6,    // weiche Schwarzblende zwischen den Etappen
+  juliaEvery        : 2,      // nach jeweils N Mandelbrot-Legs ein Julia-Intermezzo
+  juliaSeconds      : 24,
+  trail             : 0.30,   // Stärke der Motion-Trails (0 = aus, max ~0.6)
+  grain             : 0.035,  // Film-Grain (0 = aus)
+  rotationAmount    : 0.035,  // sanfte Rotation in Radiant (~±2°)
+  freq              : 0.045,  // Farbfrequenz entlang der Iterationen
+  paletteSeconds    : 22,     // Zeit bis zum nächsten Paletten-Morph
+  maxIterBase       : 300,
+  maxIterZoomK      : 55,     // + Iterationen pro Zoom-Größenordnung
+  maxIterCap        : 900,
+  minRenderScale    : 0.4,    // adaptive Qualität: nie unter dieser Auflösung
+  // Kuratierte Route besonders schöner Randpunkte der Mandelbrot-Menge:
+  targets: [
+    { c: [-0.7436438870,  0.1318259042], from: 2.2, to: 2e-6  }, // Seahorse Valley
+    { c: [-0.7453,        0.1127      ], from: 1.2, to: 8e-6  }, // Seahorse-Arme
+    { c: [ 0.2869318689,  0.0142866939], from: 0.9, to: 8e-6  }, // Elefanten-Tal
+    { c: [-0.745428,      0.113009    ], from: 0.8, to: 1e-5  }, // Spiralen
+    { c: [-1.401155,      0.0         ], from: 0.6, to: 2e-5  }, // Feigenbaum-Dendrit
+    { c: [-1.768778833,   0.001738996 ], from: 0.5, to: 5e-5  }, // Minibrot-Region
+    { c: [-0.1015,        0.6330      ], from: 0.7, to: 1e-4  }, // Kardioide-Rand
+  ],
+  juliaConstants: [
+    [-0.70176, -0.3842], [-0.8, 0.156], [0.285, 0.01],
+    [-0.835, -0.2321], [0.355, 0.355], [-0.54, 0.54],
+  ],
+};
+/* ============================ KONSTANTEN ============================ */
+const PAL_ORDER = [0, 2, 4, 1, 5, 3];
+const MAXI = 1400; // hartes Shader-Loop-Limit (>= maxIterCap)
+
+const canvas = document.getElementById('c');
+const hint = document.getElementById('hint');
+
+/* ------------------------------ State ------------------------------ */
+let legs = [];
+{
+  let j = 0;
+  CONFIG.targets.forEach((t, i) => {
+    legs.push({ type:'m', c:t.c, from:t.from ?? 2.2, to:t.to, dur:CONFIG.zoomSecondsPerLeg });
+    if (CONFIG.juliaEvery > 0 && (i % CONFIG.juliaEvery) === CONFIG.juliaEvery - 1) {
+      legs.push({ type:'j', cj:CONFIG.juliaConstants[j++ % CONFIG.juliaConstants.length], dur:CONFIG.juliaSeconds });
+    }
+  });
+}
+let legIndex = 0, legTime = 0, clock = 0;
+let manualPause = false;
+
+const lerp = (a,b,t)=>a+(b-a)*t;
+const smooth01 = x => x<=0?0 : x>=1?1 : x*x*(3-2*x);
+
+function currentState(){
+  const leg = legs[legIndex];
+  const t = legTime / leg.dur;
+  let center, scale, julia = 0, juliaC = [0,0];
+  if (leg.type === 'm'){
+    const zp = Math.min(t / (1 - CONFIG.holdFraction), 1);
+    const e = zp*zp*(3-2*zp);
+    scale = Math.exp(lerp(Math.log(leg.from), Math.log(leg.to), e));
+    center = leg.c;
+  } else {
+    julia = 1; center = [0,0];
+    scale = 1.6 * (1 + 0.05*Math.sin(clock*0.2));
+    const a = t * Math.PI * 2;
+    juliaC = [ leg.cj[0] + 0.012*Math.cos(a), leg.cj[1] + 0.012*Math.sin(a) ];
+  }
+  const rot = Math.sin(clock*0.13) * CONFIG.rotationAmount;
+  const fade = Math.min(smooth01(legTime/CONFIG.fadeSeconds),
+                        smooth01((leg.dur-legTime)/CONFIG.fadeSeconds));
+  const maxIter = Math.round(Math.min(
+    CONFIG.maxIterBase + CONFIG.maxIterZoomK * Math.log10(3/scale),
+    CONFIG.maxIterCap));
+  const P = CONFIG.paletteSeconds, i = Math.floor(clock/P), f = clock - i*P;
+  const m = f > P-3 ? smooth01((f-(P-3))/3) : 0;
+  return { center, scale, julia, juliaC, rot, fade, maxIter,
+           palA: PAL_ORDER[i % PAL_ORDER.length],
+           palB: PAL_ORDER[(i+1) % PAL_ORDER.length],
+           palMix: m,
+           trail: (leg.type==='m' && t > 1-CONFIG.holdFraction) ? CONFIG.trail*0.4 : CONFIG.trail };
+}
+
+/* ============================ WEBGL-PFAD ============================ */
+const VS = `#version 300 es
+layout(location=0) in vec2 aPos;
+out vec2 vUV;
+void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.,1.); }`;
+
+const FS_FRACTAL = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 outColor;
+uniform vec2 uRes; uniform vec2 uCenter; uniform float uScale, uRot;
+uniform int uMaxIter; uniform float uJulia; uniform vec2 uJuliaC;
+uniform int uPalA, uPalB; uniform float uPalMix, uTime, uFade, uFreq, uGrain;
+
+vec3 pal(float t, int idx){
+  vec3 a=vec3(0.5), b=vec3(0.5), c=vec3(1.0), d=vec3(0.0,0.10,0.20);
+  if      (idx==1){ d=vec3(0.00,0.33,0.67); }
+  else if (idx==2){ c=vec3(1.0,0.7,0.4); d=vec3(0.00,0.15,0.20); }
+  else if (idx==3){ c=vec3(1.0,1.0,0.5); d=vec3(0.80,0.90,0.30); }
+  else if (idx==4){ a=vec3(0.5,0.2,0.4); b=vec3(0.5,0.3,0.4); d=vec3(0.30,0.20,0.20); }
+  else if (idx==5){ d=vec3(0.00,0.15,0.35); }
+  return a + b*cos(6.2831853*(c*t+d));
+}
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+
+void main(){
+  vec2 p = (vUV - 0.5) * vec2(uRes.x/uRes.y, 1.0);
+  float cr = cos(uRot), sr = sin(uRot);
+  p = mat2(cr,-sr,sr,cr) * p;
+  vec2 pix = uCenter + p * uScale;
+  vec2 c = mix(pix, uJuliaC, uJulia);
+  vec2 z = mix(vec2(0.0), pix, uJulia);
+  float sn = -1.0;
+  for (int i=0;i<${MAXI};i++){
+    if (i >= uMaxIter) break;
+    z = vec2(z.x*z.x - z.y*z.y, 2.0*z.x*z.y) + c;
+    if (dot(z,z) > 65536.0){ sn = float(i); break; }
+  }
+  vec3 col;
+  if (sn < 0.0){
+    col = pal(uTime*0.02, uPalA) * 0.05;      // Inneres: dunkler Schatten-Glow
+  } else {
+    float lz = 0.5*log(dot(z,z));
+    float nu = log(lz*1.442695)*1.442695;     // log2(log2|z|)
+    float v = sn + 1.0 - nu;                  // smooth iteration count
+    float tt = v*uFreq + uTime*0.015;
+    col = mix(pal(tt, uPalA), pal(tt, uPalB), uPalMix);
+  }
+  float l = dot(col, vec3(0.299,0.587,0.114));
+  col = mix(vec3(l), col, 1.18);              // Sättigung
+  col *= uFade;                               // Leg-Übergänge
+  float vig = 1.0 - smoothstep(0.45, 0.95, distance(vUV, vec2(0.5)));
+  col *= 0.65 + 0.35*vig;                     // Vignette
+  col += (hash(vUV*uRes + fract(uTime)*371.0) - 0.5) * uGrain;
+  outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
+const FS_FEEDBACK = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o;
+uniform sampler2D uCur, uHist; uniform float uTrail;
+void main(){
+  vec2 uv2 = clamp((vUV - 0.5)/1.004 + 0.5, 0.0, 1.0);
+  vec3 cur  = texture(uCur,  vUV).rgb;
+  vec3 hist = texture(uHist, uv2).rgb * 0.985;
+  o = vec4(mix(cur, hist, uTrail), 1.0);
+}`;
+
+const FS_BLIT = `#version 300 es
+precision highp float;
+in vec2 vUV; out vec4 o; uniform sampler2D uTex;
+void main(){ o = vec4(texture(uTex, vUV).rgb, 1.0); }`;
+
+function startWebGL(gl){
+  const sh = (type, src) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
+      throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const prog = (fs) => {
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+      throw new Error(gl.getProgramInfoLog(p));
+    const u = {}; const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
+    for (let i=0;i<n;i++){ const inf = gl.getActiveUniform(p,i); u[inf.name] = gl.getUniformLocation(p, inf.name); }
+    return { p, u };
+  };
+  const pFrac = prog(FS_FRACTAL), pFeed = prog(FS_FEEDBACK), pBlit = prog(FS_BLIT);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+  const mkTex = (w,h) => {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const f = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+    const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+    gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return ok ? { t, f, w, h } : null;
+  };
+
+  let renderScale = 1, frac = null, histA = null, histB = null, useTrails = true;
+
+  function allocTargets(){
+    const W = canvas.width, H = canvas.height;
+    frac  = mkTex(Math.max(2, Math.round(W*renderScale)), Math.max(2, Math.round(H*renderScale)));
+    histA = mkTex(W, H); histB = mkTex(W, H);
+    useTrails = !!(frac && histA && histB);
+  }
+  function resize(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width  = Math.round(canvas.clientWidth  * dpr);
+    canvas.height = Math.round(canvas.clientHeight * dpr);
+    allocTargets();
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  let emaDt = 1/60, adaptCooldown = 0;
+  function adapt(dt){
+    emaDt = emaDt*0.95 + dt*0.05;
+    adaptCooldown -= dt;
+    if (adaptCooldown > 0) return;
+    if (emaDt > 1/45 && renderScale > CONFIG.minRenderScale){
+      renderScale = Math.max(CONFIG.minRenderScale, renderScale - 0.1); allocTargets(); adaptCooldown = 1.5;
+    } else if (emaDt < 1/58 && renderScale < 1){
+      renderScale = Math.min(1, renderScale + 0.1); allocTargets(); adaptCooldown = 1.5;
+    }
+  }
+
+  const drawTri = () => gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  return function frame(dt){
+    adapt(dt);
+    const s = currentState();
+
+    gl.useProgram(pFrac.p);
+    gl.uniform2f(pFrac.u.uRes, frac ? frac.w : canvas.width, frac ? frac.h : canvas.height);
+    gl.uniform2f(pFrac.u.uCenter, s.center[0], s.center[1]);
+    gl.uniform1f(pFrac.u.uScale, s.scale);
+    gl.uniform1f(pFrac.u.uRot, s.rot);
+    gl.uniform1i(pFrac.u.uMaxIter, s.maxIter);
+    gl.uniform1f(pFrac.u.uJulia, s.julia);
+    gl.uniform2f(pFrac.u.uJuliaC, s.juliaC[0], s.juliaC[1]);
+    gl.uniform1i(pFrac.u.uPalA, s.palA);
+    gl.uniform1i(pFrac.u.uPalB, s.palB);
+    gl.uniform1f(pFrac.u.uPalMix, s.palMix);
+    gl.uniform1f(pFrac.u.uTime, clock);
+    gl.uniform1f(pFrac.u.uFade, s.fade);
+    gl.uniform1f(pFrac.u.uFreq, CONFIG.freq);
+    gl.uniform1f(pFrac.u.uGrain, CONFIG.grain);
+
+    if (useTrails){
+      gl.bindFramebuffer(gl.FRAMEBUFFER, frac.f);
+      gl.viewport(0, 0, frac.w, frac.h);
+      drawTri();
+
+      gl.useProgram(pFeed.p);
+      gl.uniform1f(pFeed.u.uTrail, s.trail);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, frac.t);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, histA.t);
+      gl.uniform1i(pFeed.u.uCur, 0); gl.uniform1i(pFeed.u.uHist, 1);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, histB.f);
+      gl.viewport(0, 0, histB.w, histB.h);
+      drawTri();
+
+      gl.useProgram(pBlit.p);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, histB.t);
+      gl.uniform1i(pBlit.u.uTex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      drawTri();
+
+      const tmp = histA; histA = histB; histB = tmp;
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      drawTri();
+    }
+  };
+}
+
+/* ========================= 2D-FALLBACK (kein WebGL2) ========================= */
+function startFallback2D(){
+  const ctx = canvas.getContext('2d');
+  const off = document.createElement('canvas');
+  const octx = off.getContext('2d');
+  let fbW = 300, emaMs = 16;
+
+  function palJS(t, idx){
+    const sets = [
+      [[.5,.5,.5],[.5,.5,.5],[1,1,1],[0,.10,.20]],
+      [[.5,.5,.5],[.5,.5,.5],[1,1,1],[0,.33,.67]],
+      [[.5,.5,.5],[.5,.5,.5],[1,.7,.4],[0,.15,.20]],
+      [[.5,.5,.5],[.5,.5,.5],[1,1,.5],[.8,.9,.3]],
+      [[.5,.2,.4],[.5,.3,.4],[1,1,1],[.3,.2,.2]],
+      [[.5,.5,.5],[.5,.5,.5],[1,1,1],[0,.15,.35]],
+    ];
+    const [a,b,c,d] = sets[idx % sets.length];
+    const TAU = Math.PI*2;
+    return [0,1,2].map(k => a[k] + b[k]*Math.cos(TAU*(c[k]*t + d[k])));
+  }
+
+  return function frame(){
+    const W = canvas.width, H = canvas.height;
+    const fbH = Math.max(2, Math.round(fbW * H / W));
+    if (off.width !== fbW || off.height !== fbH){ off.width = fbW; off.height = fbH; }
+    const s = currentState();
+    const img = octx.createImageData(fbW, fbH);
+    const d = img.data;
+    const maxIter = Math.min(s.maxIter, 300);
+    const t0 = performance.now();
+
+    for (let y=0; y<fbH; y++){
+      for (let x=0; x<fbW; x++){
+        let px = (x/fbW - 0.5) * (W/H), py = (y/fbH - 0.5);
+        const cr = Math.cos(s.rot), sr = Math.sin(s.rot);
+        const rx = px*cr - py*sr, ry = px*sr + py*cr;
+        const cx0 = lerp(s.center[0] + rx*s.scale, s.juliaC[0], s.julia);
+        const cy0 = lerp(s.center[1] + ry*s.scale, s.juliaC[1], s.julia);
+        let zx = lerp(0, s.center[0] + rx*s.scale, s.julia);
+        let zy = lerp(0, s.center[1] + ry*s.scale, s.julia);
+        let sn = -1, i = 0;
+        for (; i<maxIter; i++){
+          const x2 = zx*zx - zy*zy + cx0, y2 = 2*zx*zy + cy0;
+          zx = x2; zy = y2;
+          if (zx*zx + zy*zy > 65536){ sn = i; break; }
+        }
+        let r=0, g=0, b=0;
+        if (sn >= 0){
+          const lz = 0.5*Math.log(zx*zx + zy*zy);
+          const nu = Math.log(lz*1.442695)*1.442695;
+          const tt = (sn + 1 - nu) * CONFIG.freq + clock*0.015;
+          const ca = palJS(tt, s.palA), cb = palJS(tt, s.palB);
+          r = lerp(ca[0], cb[0], s.palMix); g = lerp(ca[1], cb[1], s.palMix); b = lerp(ca[2], cb[2], s.palMix);
+        }
+        r *= s.fade; g *= s.fade; b *= s.fade;
+        const k = (y*fbW + x) * 4;
+        d[k] = r*255; d[k+1] = g*255; d[k+2] = b*255; d[k+3] = 255;
+      }
+    }
+    octx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, W, H);
+
+    emaMs = emaMs*0.9 + (performance.now()-t0)*0.1;
+    if (emaMs > 90 && fbW > 200) fbW = Math.round(fbW*0.8);
+  };
+}
+
+/* ============================ MAIN LOOP ============================ */
+let renderFrame;
+try {
+  const gl = canvas.getContext('webgl2', { antialias:false, alpha:false });
+  if (!gl) throw new Error('no webgl2');
+  renderFrame = startWebGL(gl);
+} catch (e) {
+  renderFrame = startFallback2D();
+}
+
+let last = performance.now();
+function loop(now){
+  requestAnimationFrame(loop);
+  let dt = Math.min((now - last)/1000, 0.1);
+  last = now;
+  if (document.hidden || manualPause) return;
+  clock += dt;
+  legTime += dt;
+  if (legTime >= legs[legIndex].dur){ legTime = 0; legIndex = (legIndex+1) % legs.length; }
+  renderFrame(dt);
+}
+requestAnimationFrame(loop);
+
+/* ====================== SCREENSAVER-VERHALTEN ====================== */
+let idleTimer = null, hintTimer = null;
+function activity(){
+  document.body.classList.remove('idle');
+  hint.style.opacity = 1;
+  clearTimeout(idleTimer); clearTimeout(hintTimer);
+  idleTimer = setTimeout(() => document.body.classList.add('idle'), 3000);
+  hintTimer = setTimeout(() => hint.style.opacity = 0, 2200);
+}
+['mousemove','mousedown','keydown','touchstart'].forEach(ev =>
+  window.addEventListener(ev, activity, { passive:true }));
+activity();
+
+function toggleFullscreen(){
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(()=>{});
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+  if (e.key === ' ') { manualPause = !manualPause; e.preventDefault(); }
+});
+window.addEventListener('dblclick', toggleFullscreen);
+</script>
+</body>
+</html>
