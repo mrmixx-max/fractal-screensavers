@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000006">
+<title>Fractal Neon — Screensaver</title>
+<style>
+  :root{color-scheme:dark;--ink:#e8e4ff;--muted:#a9a3c9}
+  *{box-sizing:border-box} html,body{height:100%;margin:0;overflow:hidden;background:#000006;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:none}
+  .vignette{position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at center,transparent 30%,rgba(0,0,10,.06) 55%,rgba(0,0,8,.78) 115%);mix-blend-mode:multiply}
+  .grain{position:fixed;inset:0;pointer-events:none;opacity:.075;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.75'/%3E%3C/svg%3E");mix-blend-mode:screen}
+  .fade{position:fixed;inset:0;pointer-events:none;background:#000;opacity:0;transition:opacity 1.6s ease;z-index:5}.fade.on{opacity:1}
+  .loader{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;z-index:6;transition:opacity .9s}.loader.off{opacity:0}
+  .loader span{font:700 10px ui-monospace,monospace;letter-spacing:.3em;color:#fff;text-shadow:0 0 25px #a855f7,0 0 50px #22d3ee}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas><div class="vignette"></div><div class="grain"></div>
+<div class="fade" id="fade"></div>
+<div class="loader" id="loader"><span>INITIALIZING DEEP FIELD</span></div>
+<script>
+(() => {
+  const canvas=document.querySelector('#view'), gl=canvas.getContext('webgl',{antialias:false,preserveDrawingBuffer:false,alpha:false});
+  const loader=document.querySelector('#loader'), fade=document.querySelector('#fade');
+  if(!gl){document.body.innerHTML='<div style="display:grid;place-items:center;height:100%;font-family:system-ui;color:#fff;background:#000006">WebGL wird benötigt.</div>';return}
+
+  const vert=`attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
+  const frag=`precision highp float;uniform vec2 r,c;uniform float z,t,mi,h,g;
+  #define PI 3.14159265
+  vec3 pal(float x){vec3 a=vec3(.13,.02,.35),b=vec3(.62,.24,.9),d=vec3(.25,.85,.98);return a+b*cos(6.28318*(vec3(.055,.17,.32)*x+d+h+vec3(0.,.12,.28)));}
+  void main(){vec2 uv=(gl_FragCoord.xy-.5*r)/r.y;vec2 q=c+uv*z;vec2 w=vec2(0.);float n=0.,trap=10.,energy=0.;
+  for(int i=0;i<900;i++){if(float(i)>=mi)break;w=vec2(w.x*w.x-w.y*w.y,2.*w.x*w.y)+q;float l=dot(w,w);trap=min(trap,abs(length(w)-.55));if(l>256.)break;n+=1.;energy+=exp(-l*2.8);}
+  float smooth=n-log2(max(1.,log2(max(1.,dot(w,w)))))+4.;float escaped=step(n,mi-.1);float bands=.5+.5*cos(smooth*.19+t*.16);float edge=exp(-7.*trap)*g;float halo=pow(clamp(energy*.075,0.,1.),.4);
+  vec3 col=pal(smooth*.034+bands*.19);col+=vec3(.2,.015,.47)*edge+vec3(.015,.44,.78)*halo;col*=escaped;col+=vec3(.004,.001,.012)*(1.-escaped);col=pow(col,vec3(.7));gl_FragColor=vec4(col,1.);}`;
+  function compile(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+  const pr=gl.createProgram();gl.attachShader(pr,compile(gl.VERTEX_SHADER,vert));gl.attachShader(pr,compile(gl.FRAGMENT_SHADER,frag));gl.linkProgram(pr);gl.useProgram(pr);
+  const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);const pos=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
+  const U=Object.fromEntries(['r','c','z','t','mi','h','g'].map(x=>[x,gl.getUniformLocation(pr,x)]));
+
+  // ─── Screensaver state ─────────────────────────────────────────────────────
+  const REGIONS=[
+    [-.743643887037151,.13182590420533,2.75,'Seahorse Valley'],
+    [-.101096363845,.956286510809,1.4,'Spiral Nebula'],
+    [.285,.01,1.65,'Electric Sea'],
+    [-1.25066,.02012,.22,'Feathered Edge'],
+    [-.7453,.1127,.09,'Needle Point'],
+    [-.7269,.1889,.14,'Dragon Tail'],
+    [.2501,.00003,.08,'Elephant Valley']
+  ];
+  let region=0, phase=0, t0=performance.now();
+  let center=[REGIONS[0][0],REGIONS[0][1]], zoom=REGIONS[0][2];
+  let time=0, iterations=340, hue=Math.random(), glow=1.5;
+  let mode='drift'; // drift → zoom → shift
+  let modeTimer=0, driftDir=[0,0], zoomTarget=zoom*.1, zoomRate=.992;
+  const DRIFT_MS=11000, ZOOM_MS=15000, SHIFT_MS=3000;
+
+  function nextRegion(){region=(region+1)%REGIONS.length;return REGIONS[region]}
+  function randomInRegion(){const p=REGIONS[region];return[p[0]+(Math.random()-.5)*p[2]*.6,p[1]+(Math.random()-.5)*p[2]*.6]}
+  function startDrift(){mode='drift';modeTimer=DRIFT_MS;const r=randomInRegion();center=[r[0],r[1]];zoom=REGIONS[region][2];driftDir=[(Math.random()-.5)*zoom*.00008,(Math.random()-.5)*zoom*.00008]}
+  function startZoom(){mode='zoom';modeTimer=ZOOM_MS;zoomTarget=zoom*.015;zoomRate=Math.pow(zoomTarget/zoom,1/(ZOOM_MS/16.6))}
+  function startShift(){mode='shift';modeTimer=SHIFT_MS;fade.classList.add('on')}
+  function endShift(){fade.classList.remove('on');nextRegion();startDrift();hue=Math.random()}
+
+  startDrift();
+
+  function update(now){const dt=now-t0;t0=now;modeTimer-=dt;
+    if(mode==='drift'){center[0]+=driftDir[0];center[1]+=driftDir[1];if(modeTimer<=0)startZoom()}
+    else if(mode==='zoom'){zoom*=zoomRate;if(modeTimer<=0||zoom<=zoomTarget)startShift()}
+    else if(mode==='shift'){if(modeTimer<=SHIFT_MS*.5)endShift()}
+    // slow hue drift
+    hue+=dt*.000012;if(hue>1)hue-=1;
+    // subtle iteration breathing
+    iterations=320+Math.sin(now*.0003)*60;
+  }
+
+  function resize(){const d=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(innerWidth*d);canvas.height=Math.round(innerHeight*d);gl.viewport(0,0,canvas.width,canvas.height)}addEventListener('resize',resize);resize();
+
+  function render(now){update(now);time=now*.001;
+    gl.uniform2f(U.r,canvas.width,canvas.height);gl.uniform2f(U.c,center[0],center[1]);gl.uniform1f(U.z,zoom);gl.uniform1f(U.t,time);gl.uniform1f(U.mi,iterations);gl.uniform1f(U.h,hue);gl.uniform1f(U.g,glow);
+    gl.drawArrays(gl.TRIANGLES,0,3);requestAnimationFrame(render)}
+  requestAnimationFrame(render);
+  setTimeout(()=>loader.classList.add('off'),900);
+
+  // Optional: exit on any key/mouse (screensaver convention)
+  function exit(){document.exitPointerLock?.();window.close?.()}
+  addEventListener('pointerdown',exit);addEventListener('keydown',exit);
+  // Prevent context menu
+  addEventListener('contextmenu',e=>e.preventDefault());
+})();
+</script>
+</body>
+</html>
