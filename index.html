@@ -19,11 +19,23 @@
     font:14px/1.4 system-ui, sans-serif; letter-spacing:.06em;
     background:rgba(0,0,0,.35); padding:8px 18px; border-radius:20px;
   }
+  #rec {
+    position:fixed; right:20px; top:20px; z-index:100;
+    background:rgba(0,0,0,.5); color:#fff; border:1px solid rgba(255,255,255,.3);
+    font:12px/1 system-ui, sans-serif; letter-spacing:.08em;
+    padding:8px 16px; border-radius:20px; cursor:pointer;
+    transition:all .3s; opacity:0; pointer-events:none;
+  }
+  body:not(.idle) #rec { opacity:1; pointer-events:auto; }
+  #rec:hover { background:rgba(255,255,255,.15); border-color:rgba(255,255,255,.6); }
+  #rec.recording { color:#ff4444; border-color:#ff4444; animation:blink 1s infinite; opacity:1; pointer-events:auto; }
+  @keyframes blink { 50% { opacity:.5; } }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="hint">F = Vollbild &nbsp;·&nbsp; Leertaste = Pause &nbsp;·&nbsp; Esc = Beenden</div>
+<button id="rec">● REC</button>
 <script>
 'use strict';
 /* ============================== CONFIG ============================== */
@@ -421,6 +433,39 @@ window.addEventListener('keydown', e => {
   if (e.key === ' ') { manualPause = !manualPause; e.preventDefault(); }
 });
 window.addEventListener('dblclick', toggleFullscreen);
+
+/* ====================== CANVAS RECORDER ====================== */
+const recBtn = document.getElementById('rec');
+let mediaRecorder = null;
+let recordedChunks = null;
+
+recBtn.addEventListener('click', () => {
+  if(mediaRecorder && mediaRecorder.state === 'recording'){
+    mediaRecorder.stop();
+    return;
+  }
+  const stream = canvas.captureStream(60);
+  recordedChunks = [];
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+             : MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8'
+             : 'video/webm';
+  mediaRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000 });
+  mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fractal-classic-' + Date.now() + '.webm';
+    a.click();
+    URL.revokeObjectURL(url);
+    recBtn.textContent = '● REC';
+    recBtn.classList.remove('recording');
+  };
+  mediaRecorder.start();
+  recBtn.textContent = '■ STOP';
+  recBtn.classList.add('recording');
+});
 </script>
 </body>
 </html>

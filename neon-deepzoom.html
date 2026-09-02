@@ -23,11 +23,24 @@
     background:rgba(10,0,20,.45); padding:8px 20px; border-radius:4px;
     border:1px solid rgba(0,255,255,.25);
   }
+  #rec {
+    position:fixed; right:20px; top:20px; z-index:100;
+    background:rgba(10,0,20,.7); color:#0ff; border:1px solid rgba(0,255,255,.4);
+    font:12px/1 'Courier New', monospace; letter-spacing:.1em;
+    padding:8px 16px; border-radius:4px; cursor:pointer;
+    text-shadow:0 0 6px #0ff; transition:all .3s;
+    opacity:0; pointer-events:none;
+  }
+  body:not(.idle) #rec { opacity:1; pointer-events:auto; }
+  #rec:hover { background:rgba(0,255,255,.2); border-color:#0ff; }
+  #rec.recording { color:#f0f; border-color:#f0f; text-shadow:0 0 6px #f0f; animation:blink 1s infinite; opacity:1; pointer-events:auto; }
+  @keyframes blink { 50% { opacity:.5; } }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="hint">F = FULLSCREEN &nbsp;·&nbsp; SPACE = PAUSE &nbsp;·&nbsp; ESC = EXIT</div>
+<button id="rec">● REC</button>
 <script>
 'use strict';
 /* ============================== CONFIG ============================== */
@@ -523,10 +536,49 @@ function toggleFullscreen(){
   else document.documentElement.requestFullscreen().catch(()=>{});
 }
 window.addEventListener('keydown', e => {
-  if (e.key === 'f' || e.key === 'F') toggleFullscreen();
-  if (e.key === ' ') { manualPause = !manualPause; e.preventDefault(); }
+  if(e.key === 'f' || e.key === 'F') toggleFullscreen();
+  if(e.key === ' ') { manualPause = !manualPause; e.preventDefault(); }
 });
 window.addEventListener('dblclick', toggleFullscreen);
+
+/* ====================== CANVAS RECORDER ====================== */
+const recBtn = document.getElementById('rec');
+let mediaRecorder = null;
+let recordedChunks = null;
+
+recBtn.addEventListener('click', () => {
+  if(mediaRecorder && mediaRecorder.state === 'recording'){
+    mediaRecorder.stop();
+    return;
+  }
+
+  // Capture canvas at 60fps
+  const stream = canvas.captureStream(60);
+  recordedChunks = [];
+
+  // Pick best supported codec
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9'
+             : MediaRecorder.isTypeSupported('video/webm;codecs=vp8') ? 'video/webm;codecs=vp8'
+             : 'video/webm';
+
+  mediaRecorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8000000 });
+  mediaRecorder.ondataavailable = e => { if(e.data.size > 0) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fractal-neon-' + Date.now() + '.webm';
+    a.click();
+    URL.revokeObjectURL(url);
+    recBtn.textContent = '● REC';
+    recBtn.classList.remove('recording');
+  };
+
+  mediaRecorder.start();
+  recBtn.textContent = '■ STOP';
+  recBtn.classList.add('recording');
+});
 </script>
 </body>
 </html>
