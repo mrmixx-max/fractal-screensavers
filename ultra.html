@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#03000c">
+<title>Fractal Neon — Ultra Deep Zoom</title>
+<style>
+  :root{color-scheme:dark;--ink:#ebe8ff;--muted:#aaa4c9;--glass:rgba(11,7,31,.54);--line:rgba(215,194,255,.18);--violet:#a855f7;--cyan:#22d3ee}
+  *{box-sizing:border-box} html,body{height:100%;margin:0;overflow:hidden;background:#020008;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block;cursor:crosshair;touch-action:none}
+  .vignette{position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at center,transparent 33%,rgba(0,0,8,.1) 60%,rgba(0,0,7,.82) 120%);mix-blend-mode:multiply}
+  .grain{position:fixed;inset:0;pointer-events:none;opacity:.09;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 160 160' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.8'/%3E%3C/svg%3E");mix-blend-mode:screen}
+  header{position:fixed;inset:0 0 auto;display:flex;justify-content:space-between;align-items:flex-start;padding:22px 25px;pointer-events:none;z-index:2}
+  .brand{letter-spacing:.21em;text-transform:uppercase;font-size:10px;font-weight:800;line-height:1.75;text-shadow:0 0 18px rgba(175,71,255,.95)}
+  .brand b{font-size:13px;display:block;background:linear-gradient(90deg,#fff,#cf9bff 38%,#51e8ff 75%,#fff);background-clip:text;color:transparent;-webkit-background-clip:text}
+  .status{font:700 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;text-align:right;letter-spacing:.08em;color:#d7d2f6;text-shadow:0 0 15px rgba(74,224,255,.8)}
+  .status i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#54ffd1;box-shadow:0 0 11px #54ffd1;margin-right:6px}
+  .panel{position:fixed;z-index:3;left:20px;bottom:20px;width:min(370px,calc(100vw - 40px));padding:15px 16px 14px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(135deg,rgba(29,14,65,.72),rgba(5,7,24,.49));backdrop-filter:blur(16px) saturate(135%);box-shadow:0 15px 65px rgba(0,0,0,.47),inset 0 1px rgba(255,255,255,.1)}
+  .panel h1{font-size:12px;margin:0 0 8px;letter-spacing:.13em;text-transform:uppercase}.panel p{color:var(--muted);font-size:11px;line-height:1.5;margin:0 0 12px}
+  .row{display:grid;grid-template-columns:1fr auto;gap:9px;align-items:center;margin:7px 0;font-size:11px;color:#d8d3ea}.row output{font:700 10px ui-monospace,monospace;color:#6cf4ff;text-align:right;min-width:58px}
+  input[type=range]{width:100%;accent-color:#a855f7;grid-column:1/3;cursor:pointer}.buttons{display:flex;gap:7px;margin-top:13px;flex-wrap:wrap}
+  button{appearance:none;border:1px solid rgba(205,176,255,.27);border-radius:9px;padding:8px 10px;background:rgba(95,45,180,.18);color:#edeaff;font-size:10px;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:.18s ease}button:hover{transform:translateY(-1px);border-color:#8cf5ff;background:rgba(40,182,255,.2);box-shadow:0 0 20px rgba(64,210,255,.2)}button:active{transform:translateY(0)}
+  .hint{position:fixed;z-index:2;right:24px;bottom:24px;color:#c8c2e3;font:10px/1.6 ui-monospace,monospace;text-align:right;letter-spacing:.05em;text-shadow:0 2px 10px #000}.hint kbd{color:white;border:1px solid rgba(255,255,255,.25);padding:2px 5px;border-radius:4px;background:rgba(0,0,0,.25)}
+  .loader{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;z-index:4;opacity:1;transition:opacity .7s}.loader span{font:700 11px ui-monospace,monospace;letter-spacing:.22em;color:white;text-shadow:0 0 25px #ac5cff}.loader.off{opacity:0}
+  @media(max-width:600px){header{padding:14px 16px}.status{display:none}.panel{left:12px;bottom:12px;width:calc(100vw - 24px);padding:12px}.hint{display:none}.panel p{display:none}.buttons{margin-top:8px}}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas><div class="vignette"></div><div class="grain"></div>
+<header><div class="brand"><b>Fractal Neon</b>ultra deep zoom · gpu field</div><div class="status"><i></i>LIVE RENDER<br><span id="coords">X −0.743644 · Y 0.131826</span></div></header>
+<section class="panel" aria-label="Fraktalsteuerung"><h1>Chromatic Singularity</h1><p>Ziehe zum Navigieren. Das Mausrad führt dich tiefer in das Feld. Jeder Frame erzeugt eine neue, lebendige Topografie.</p>
+<div class="row"><span>Detail / Iterationen</span><output id="iterVal">280</output><input id="iter" type="range" min="80" max="900" value="280"></div>
+<div class="row"><span>Chromatische Drift</span><output id="hueVal">0.54</output><input id="hue" type="range" min="0" max="1" step="0.01" value="0.54"></div>
+<div class="row"><span>Orbit Glow</span><output id="glowVal">1.40</output><input id="glow" type="range" min="0.2" max="3" step="0.05" value="1.4"></div>
+<div class="buttons"><button id="random">Neuer Kosmos</button><button id="home">Reset</button><button id="shot">PNG exportieren</button><button id="hide">UI aus</button></div></section>
+<div class="hint"><kbd>Scroll</kbd> zoom · <kbd>Drag</kbd> orbit · <kbd>R</kbd> random · <kbd>H</kbd> UI</div><div class="loader"><span>RENDERING SINGULARITY</span></div>
+<script>
+(() => {
+  const canvas=document.querySelector('#view'), gl=canvas.getContext('webgl',{antialias:false,preserveDrawingBuffer:true,alpha:false});
+  const loader=document.querySelector('.loader');
+  if(!gl){document.body.innerHTML='<div style="display:grid;place-items:center;height:100%;font-family:system-ui;color:#fff;background:#05000f">WebGL wird für diesen Renderer benötigt.</div>';return}
+  const vert=`attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
+  const frag=`precision highp float;uniform vec2 r,c;uniform float z,t,mi,h,g;
+  #define PI 3.14159265
+  vec3 pal(float x){vec3 a=vec3(.14,.025,.34),b=vec3(.63,.25,.9),d=vec3(.26,.86,.98);return a+b*cos(6.28318*(vec3(.06,.18,.33)*x+d+h+vec3(0.,.12,.28)));}
+  void main(){vec2 uv=(gl_FragCoord.xy-.5*r)/r.y;vec2 q=c+uv*z;vec2 w=vec2(0.);float n=0., trap=10.,energy=0.;
+  for(int i=0;i<900;i++){if(float(i)>=mi)break;w=vec2(w.x*w.x-w.y*w.y,2.*w.x*w.y)+q;float l=dot(w,w);trap=min(trap,abs(length(w)-.55));if(l>256.)break;n+=1.;energy+=exp(-l*2.8);}
+  float smooth=n-log2(max(1.,log2(max(1.,dot(w,w)))))+4.;float escaped=step(n,mi-.1);float bands=.5+.5*cos(smooth*.20+t*.18);float edge=exp(-7.*trap)*g;float halo=pow(clamp(energy*.08,0.,1.),.42);
+  vec3 col=pal(smooth*.036+bands*.2);col+=vec3(.22,.02,.48)*edge+vec3(.02,.45,.8)*halo;col*=escaped;col+=vec3(.005,.001,.014)*(1.-escaped);col=pow(col,vec3(.72));gl_FragColor=vec4(col,1.);}`;
+  function compile(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+  const pr=gl.createProgram();gl.attachShader(pr,compile(gl.VERTEX_SHADER,vert));gl.attachShader(pr,compile(gl.FRAGMENT_SHADER,frag));gl.linkProgram(pr);gl.useProgram(pr);
+  const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);const pos=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
+  const U=Object.fromEntries(['r','c','z','t','mi','h','g'].map(x=>[x,gl.getUniformLocation(pr,x)]));
+  let center=[-0.743643887037151,.13182590420533], zoom=2.75, dragging=false,last=[0,0], time=0, iterations=280,hue=.54,glow=1.4, ui=true;
+  function resize(){const d=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(innerWidth*d);canvas.height=Math.round(innerHeight*d);gl.viewport(0,0,canvas.width,canvas.height)}addEventListener('resize',resize);resize();
+  function render(now){time=now*.001;gl.uniform2f(U.r,canvas.width,canvas.height);gl.uniform2f(U.c,center[0],center[1]);gl.uniform1f(U.z,zoom);gl.uniform1f(U.t,time);gl.uniform1f(U.mi,iterations);gl.uniform1f(U.h,hue);gl.uniform1f(U.g,glow);gl.drawArrays(gl.TRIANGLES,0,3);document.querySelector('#coords').textContent=`X ${center[0].toFixed(9)} · Y ${center[1].toFixed(9)} · Z ${(2.75/zoom).toExponential(2)}`;requestAnimationFrame(render)}requestAnimationFrame(render);setTimeout(()=>loader.classList.add('off'),650);
+  function pointer(e){const rect=canvas.getBoundingClientRect();return[(e.clientX-rect.left)/rect.width,(e.clientY-rect.top)/rect.height]}
+  canvas.addEventListener('pointerdown',e=>{dragging=true;last=pointer(e);canvas.setPointerCapture(e.pointerId)});canvas.addEventListener('pointerup',()=>dragging=false);canvas.addEventListener('pointermove',e=>{if(!dragging)return;const n=pointer(e),a=canvas.width/canvas.height;center[0]-=(n[0]-last[0])*zoom*2*a;center[1]+=(n[1]-last[1])*zoom*2;last=n});
+  canvas.addEventListener('wheel',e=>{e.preventDefault();const p=pointer(e),a=canvas.width/canvas.height,before=[center[0]+(p[0]-.5)*zoom*2*a,center[1]-(p[1]-.5)*zoom*2];zoom*=e.deltaY>0?1.22:.82;zoom=Math.min(4,Math.max(1e-13,zoom));center[0]=before[0]-(p[0]-.5)*zoom*2*a;center[1]=before[1]+(p[1]-.5)*zoom*2},{passive:false});
+  const bind=(id,key,cb)=>{const el=document.querySelector('#'+id),out=document.querySelector('#'+id+'Val');el.addEventListener('input',()=>{window[key]=+el.value;cb(+el.value);out.textContent=key==='hue'?(+el.value).toFixed(2):key==='glow'?(+el.value).toFixed(2):el.value})};bind('iter','iterations',v=>iterations=v);bind('hue','hue',v=>hue=v);bind('glow','glow',v=>glow=v);
+  function random(){const presets=[[-.743643887037151,.13182590420533,2.75],[-.101096363845,.956286510809,1.4],[.285,.01,1.65],[-1.25066,.02012,.22],[-.7453,.1127,.09]];const p=presets[Math.floor(Math.random()*presets.length)];center=[p[0],p[1]];zoom=p[2];hue=Math.random();document.querySelector('#hue').value=hue;document.querySelector('#hueVal').textContent=hue.toFixed(2)}document.querySelector('#random').onclick=random;
+  document.querySelector('#home').onclick=()=>{center=[-.743643887037151,.13182590420533];zoom=2.75};document.querySelector('#shot').onclick=()=>{const a=document.createElement('a');a.download='fractal-neon-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click()};
+  function toggle(){ui=!ui;document.querySelector('.panel').style.display=ui?'block':'none';document.querySelector('.hint').style.display=ui?'block':'none'}document.querySelector('#hide').onclick=toggle;addEventListener('keydown',e=>{if(e.key.toLowerCase()==='r')random();if(e.key.toLowerCase()==='h')toggle();if(e.key==='+')zoom*=.82;if(e.key==='-')zoom*=1.22});
+
+  /* CANVAS RECORDER */
+  const recBtn=document.createElement('button');recBtn.id='recBtn';recBtn.textContent='● REC';
+  document.querySelector('.buttons').appendChild(recBtn);
+  let mediaRecorder=null,recordedChunks=null;
+  recBtn.addEventListener('click',()=>{
+    if(mediaRecorder&&mediaRecorder.state==='recording'){mediaRecorder.stop();return;}
+    recordedChunks=[];
+    const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
+    mediaRecorder=new MediaRecorder(canvas.captureStream(60),{mimeType:mime,videoBitsPerSecond:8000000});
+    mediaRecorder.ondataavailable=e=>{if(e.data.size>0)recordedChunks.push(e.data);};
+    mediaRecorder.onstop=()=>{
+      const blob=new Blob(recordedChunks,{type:'video/webm'});
+      const a=document.createElement('a');a.download='fractal-ultra-'+Date.now()+'.webm';
+      a.href=URL.createObjectURL(blob);a.click();URL.revokeObjectURL(a.href);
+      recBtn.textContent='● REC';recBtn.style.color='';
+    };
+    mediaRecorder.start();recBtn.textContent='■ STOP';recBtn.style.color='#ff4444';
+  });
+})();
+</script>
+</body>
+</html>
